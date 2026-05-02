@@ -1,0 +1,48 @@
+{
+  "id": "shelly_mqtt",
+  "type": "integration",
+  "name": "Shelly MQTT",
+  "version": "1.0.0",
+  "description": "Shelly Pro / Plus devices over MQTT — live + cumulative energy from EM channels (Pro 3EM only in V1)",
+  "icon": "Zap",
+  "repo": "mchacher/sowel-plugin-shelly-mqtt",
+  "author": "mchacher",
+  "sowelVersion": ">=1.4.2",
+  "settings": [
+    {
+      "key": "mqtt_url",
+      "label": "MQTT Broker URL",
+      "type": "text",
+      "required": true,
+      "placeholder": "mqtt://localhost:1883"
+    },
+    {
+      "key": "mqtt_username",
+      "label": "MQTT Username",
+      "type": "text",
+      "required": false
+    },
+    {
+      "key": "mqtt_password",
+      "label": "MQTT Password",
+      "type": "password",
+      "required": false
+    },
+    {
+      "key": "mqtt_client_id",
+      "label": "MQTT Client ID",
+      "type": "text",
+      "required": false,
+      "defaultValue": "sowel-shelly"
+    },
+    {
+      "key": "topic_filter",
+      "label": "Topic filter",
+      "type": "text",
+      "required": false,
+      "defaultValue": "shelly/#",
+      "placeholder": "Wildcard the plugin subscribes to"
+    }
+  ],
+  "apiVersion": 2
+}

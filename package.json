@@ -1,0 +1,22 @@
+{
+  "name": "sowel-plugin-shelly-mqtt",
+  "version": "1.0.0",
+  "description": "Sowel plugin: Shelly Pro / Plus devices over MQTT (Pro 3EM in V1)",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "mqtt": "^5.10.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.9"
+  },
+  "license": "AGPL-3.0"
+}
