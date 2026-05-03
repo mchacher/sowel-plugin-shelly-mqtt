@@ -18,6 +18,7 @@ import {
   parseEm1Status,
   parseEm1DataStatus,
   parseOnlinePayload,
+  parseEventsRpcSrc,
   parseJson,
 } from "./shelly-parser.js";
 
@@ -33,10 +34,17 @@ export interface Logger {
 
 export interface DeviceManager {
   upsertFromDiscovery(integrationId: string, source: string, discovered: unknown): void;
+  /**
+   * Push device data into Sowel. The optional `sourceTimestamp` (epoch
+   * seconds) lets the plugin replay historical records — Sowel writes
+   * them with the original timestamp instead of `now`. Available since
+   * Sowel v1.5.1.
+   */
   updateDeviceData(
     integrationId: string,
     sourceDeviceId: string,
     payload: Record<string, unknown>,
+    sourceTimestamp?: number,
   ): void;
   updateDeviceStatus(integrationId: string, sourceDeviceId: string, status: string): void;
   /**
@@ -48,6 +56,32 @@ export interface DeviceManager {
     sourceDeviceId: string,
     key: string,
   ): string | number | boolean | null;
+  /**
+   * Read the last-updated timestamp (ISO 8601) of a device data key, or
+   * `null` if the key has never been persisted. Used by the backfill
+   * manager to detect gaps without crossing into Sowel core.
+   * Available since Sowel v1.5.3.
+   */
+  getDeviceDataLastUpdated?(
+    integrationId: string,
+    sourceDeviceId: string,
+    key: string,
+  ): string | null;
+}
+
+/**
+ * Channel group passed to the BackfillManager. One entry per CT channel
+ * known to the plugin.
+ */
+export interface ShellyChannelGroup {
+  /** Sowel-side device id, e.g. "shelly-pro3em_00-em0". */
+  sourceDeviceId: string;
+  /** MQTT-topic-level shelly id, e.g. "shelly-pro3em_00". */
+  shellyId: string;
+  /** mDNS host id captured from events/rpc, or null until first such topic. */
+  deviceMacId: string | null;
+  /** Channel index (0-2). */
+  channelId: number;
 }
 
 interface ChannelData {
@@ -97,6 +131,13 @@ export class ShellyEngine {
    * subsequent event.
    */
   private readonly lastCumul = new Map<string, { fwd?: number; rev?: number }>();
+  /**
+   * Map of shelly topic id (e.g. "shelly-pro3em_00") to the device's
+   * mDNS host id (e.g. "shellypro3em-2cbcbbb2cf48"). Populated when an
+   * events/rpc topic is observed. Used by the backfill manager to build
+   * an HTTP RPC URL.
+   */
+  private readonly shellyIdToMacId = new Map<string, string>();
 
   constructor(
     integrationId: string,
@@ -119,6 +160,39 @@ export class ShellyEngine {
     // The MqttConnector is disposed by the plugin wrapper.
     this.known.clear();
     this.lastCumul.clear();
+    this.shellyIdToMacId.clear();
+  }
+
+  /**
+   * Snapshot of the channels currently known to the engine. Used by the
+   * backfill manager to know what to scan. The MAC id may still be null
+   * for a freshly-discovered channel that hasn't seen an events/rpc topic
+   * yet — the caller must handle that.
+   */
+  getKnownChannelGroups(): ShellyChannelGroup[] {
+    const out: ShellyChannelGroup[] = [];
+    for (const sid of this.known) {
+      // sourceDeviceId format = `<shellyId>-em<channel>`
+      const m = /^(.+)-em(\d+)$/.exec(sid);
+      if (!m) continue;
+      out.push({
+        sourceDeviceId: sid,
+        shellyId: m[1],
+        deviceMacId: this.shellyIdToMacId.get(m[1]) ?? null,
+        channelId: Number(m[2]),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Replace the in-memory baseline for a channel. The backfill manager
+   * calls this after a replay so the very next live MQTT tick computes
+   * the delta from the freshly-replayed last record, not from the value
+   * that was current before the replay.
+   */
+  setLastCumul(sourceDeviceId: string, baseline: { fwd?: number; rev?: number }): void {
+    this.lastCumul.set(sourceDeviceId, baseline);
   }
 
   // ── Internals ──────────────────────────────────────────────────────────
@@ -148,6 +222,9 @@ export class ShellyEngine {
           this.ensureDevice(info.shellyId, info.channel!);
           this.handleEm1DataStatus(sid, payload);
           break;
+        case "events_rpc":
+          this.handleEventsRpc(info.shellyId, payload);
+          break;
       }
     } catch (err) {
       this.logger.error({ err, topic }, "Dispatch error");
@@ -171,6 +248,18 @@ export class ShellyEngine {
     });
     this.known.add(sid);
     this.logger.info({ shellyId, channel, sid }, "Channel discovered");
+  }
+
+  /**
+   * Pull the device's mDNS id out of an events/rpc payload (`src` field)
+   * and remember it for the backfill manager. Idempotent.
+   */
+  private handleEventsRpc(shellyId: string, payload: Buffer): void {
+    const src = parseEventsRpcSrc(payload);
+    if (!src) return;
+    if (this.shellyIdToMacId.get(shellyId) === src) return;
+    this.shellyIdToMacId.set(shellyId, src);
+    this.logger.debug({ shellyId, deviceMacId: src }, "Captured device mDNS id");
   }
 
   private handleOnline(shellyId: string, payload: Buffer): void {
