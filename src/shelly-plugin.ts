@@ -39,6 +39,15 @@ export interface DeviceManager {
     payload: Record<string, unknown>,
   ): void;
   updateDeviceStatus(integrationId: string, sourceDeviceId: string, status: string): void;
+  /**
+   * Read the last persisted value of a device data key, decoded according
+   * to its declared type. Available since Sowel v1.5.1 — see spec 086.
+   */
+  getDeviceDataValue(
+    integrationId: string,
+    sourceDeviceId: string,
+    key: string,
+  ): string | number | boolean | null;
 }
 
 interface ChannelData {
@@ -60,10 +69,11 @@ interface DiscoveredDevice {
 const SOURCE = "mqtt";
 
 /**
- * Per-channel data definition exposed to Sowel. Energy counters use the
- * generic `energy` category in V1 — iteration 2 (spec 086) will add a
- * pool_-style override or alias resolution to feed the EnergyAggregator
- * with proper forward/reverse bindings.
+ * Per-channel data definition exposed to Sowel. `energy_forward` and
+ * `energy_reverse` carry the raw cumulative Shelly counters (monotonic).
+ * `energy` is a synthesised signed delta (Wh) computed by the plugin on
+ * every em1data event — it feeds the existing Sowel EnergyAggregator
+ * which triggers on alias `"energy"`.
  */
 const CHANNEL_DATA_DEF: ChannelData[] = [
   { key: "power",          type: "number", category: "power",   unit: "W" },
@@ -71,6 +81,7 @@ const CHANNEL_DATA_DEF: ChannelData[] = [
   { key: "current",        type: "number", category: "current", unit: "A" },
   { key: "energy_forward", type: "number", category: "energy",  unit: "Wh" },
   { key: "energy_reverse", type: "number", category: "energy",  unit: "Wh" },
+  { key: "energy",         type: "number", category: "energy",  unit: "Wh" },
 ];
 
 export class ShellyEngine {
@@ -79,6 +90,13 @@ export class ShellyEngine {
   private readonly deviceManager: DeviceManager;
   private readonly logger: Logger;
   private readonly known = new Set<string>(); // sourceDeviceIds we've already discovered
+  /**
+   * Per-channel cumulative-counter baseline. Hydrated lazily on the first
+   * em1data event for each channel by reading the last persisted
+   * energy_forward / energy_reverse from device_data. Updated on every
+   * subsequent event.
+   */
+  private readonly lastCumul = new Map<string, { fwd?: number; rev?: number }>();
 
   constructor(
     integrationId: string,
@@ -100,6 +118,7 @@ export class ShellyEngine {
   stop(): void {
     // The MqttConnector is disposed by the plugin wrapper.
     this.known.clear();
+    this.lastCumul.clear();
   }
 
   // ── Internals ──────────────────────────────────────────────────────────
@@ -192,11 +211,67 @@ export class ShellyEngine {
       return;
     }
     const v = parseEm1DataStatus(raw);
+    if (v.energy_forward === null && v.energy_reverse === null) return;
+
+    const baseline = this.ensureBaseline(sid);
     const data: Record<string, unknown> = {};
-    if (v.energy_forward !== null) data.energy_forward = v.energy_forward;
-    if (v.energy_reverse !== null) data.energy_reverse = v.energy_reverse;
-    if (Object.keys(data).length === 0) return;
+    let deltaFwd = 0;
+    let deltaRev = 0;
+
+    if (v.energy_forward !== null) {
+      if (baseline.fwd !== undefined) {
+        // current < last (reset / out-of-order) → emit 0, refresh baseline
+        deltaFwd = Math.max(0, v.energy_forward - baseline.fwd);
+      }
+      baseline.fwd = v.energy_forward;
+      data.energy_forward = v.energy_forward;
+    }
+    if (v.energy_reverse !== null) {
+      if (baseline.rev !== undefined) {
+        deltaRev = Math.max(0, v.energy_reverse - baseline.rev);
+      }
+      baseline.rev = v.energy_reverse;
+      data.energy_reverse = v.energy_reverse;
+    }
+
+    data.energy = deltaFwd - deltaRev;
     this.deviceManager.updateDeviceData(this.integrationId, sid, data);
+  }
+
+  /**
+   * Hydrate the per-channel baseline from device_data the very first time
+   * we see this channel within the engine's lifetime. After the first
+   * call the in-memory map is the source of truth.
+   *
+   * If neither key has ever been persisted (fresh install), the baseline
+   * stays { fwd: undefined, rev: undefined } and the first event emits
+   * energy = 0 — the current cumul becomes the next baseline.
+   */
+  private ensureBaseline(sid: string): { fwd?: number; rev?: number } {
+    const existing = this.lastCumul.get(sid);
+    if (existing) return existing;
+    const persistedFwd = this.deviceManager.getDeviceDataValue(
+      this.integrationId,
+      sid,
+      "energy_forward",
+    );
+    const persistedRev = this.deviceManager.getDeviceDataValue(
+      this.integrationId,
+      sid,
+      "energy_reverse",
+    );
+    const baseline: { fwd?: number; rev?: number } = {
+      fwd: typeof persistedFwd === "number" ? persistedFwd : undefined,
+      rev: typeof persistedRev === "number" ? persistedRev : undefined,
+    };
+    this.lastCumul.set(sid, baseline);
+    if (baseline.fwd !== undefined || baseline.rev !== undefined) {
+      this.logger.info(
+        { sid, fwd: baseline.fwd, rev: baseline.rev },
+        "Baseline hydrated from device_data",
+      );
+    }
+    return baseline;
   }
 }
 

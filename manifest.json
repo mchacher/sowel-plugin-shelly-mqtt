@@ -2,12 +2,12 @@
   "id": "shelly_mqtt",
   "type": "integration",
   "name": "Shelly MQTT",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Shelly Pro / Plus devices over MQTT — live + cumulative energy from EM channels (Pro 3EM only in V1)",
   "icon": "Zap",
   "repo": "mchacher/sowel-plugin-shelly-mqtt",
   "author": "mchacher",
-  "sowelVersion": ">=1.4.2",
+  "sowelVersion": ">=1.5.1",
   "settings": [
     {
       "key": "mqtt_url",
