@@ -9,6 +9,9 @@
 import { MqttConnector } from "./mqtt-connector.js";
 import { ShellyEngine } from "./shelly-plugin.js";
 import type { DeviceManager, Logger } from "./shelly-plugin.js";
+import { BackfillManager } from "./backfill-manager.js";
+import { createShellyRpcClient } from "./shelly-rpc.js";
+import type { ShellyRpcClient } from "./shelly-rpc.js";
 
 interface SettingsManager {
   get(key: string): string | undefined;
@@ -79,6 +82,7 @@ class ShellyMqttPlugin implements IntegrationPlugin {
   private deviceManager: DeviceManager;
   private mqtt: MqttConnector | null = null;
   private engine: ShellyEngine | null = null;
+  private backfill: BackfillManager | null = null;
   private status: IntegrationStatus = "disconnected";
 
   constructor(deps: PluginDeps) {
@@ -106,6 +110,10 @@ class ShellyMqttPlugin implements IntegrationPlugin {
       { key: "mqtt_client_id", label: "MQTT Client ID",  type: "text",     required: false, defaultValue: "sowel-shelly" },
       { key: "topic_filter",   label: "Topic filter",    type: "text",     required: false, defaultValue: "shelly/#",
         placeholder: "Wildcard the plugin subscribes to" },
+      { key: "backfill_enabled", label: "Replay missing minutes from device flash on boot", type: "boolean", required: false, defaultValue: "true" },
+      { key: "backfill_hours", label: "Backfill window (hours, max 168)", type: "number", required: false, defaultValue: "24" },
+      { key: "shelly_auth_user", label: "Shelly device username (only if device auth enabled)", type: "text", required: false },
+      { key: "shelly_auth_password", label: "Shelly device password", type: "password", required: false },
     ];
   }
 
@@ -141,6 +149,8 @@ class ShellyMqttPlugin implements IntegrationPlugin {
       );
       this.engine.start(topicFilter);
 
+      this.startBackfill();
+
       this.status = this.mqtt.isConnected() ? "connected" : "disconnected";
       if (this.status === "connected") {
         this.eventBus.emit({ type: "system.integration.connected", integrationId: this.id });
@@ -153,6 +163,10 @@ class ShellyMqttPlugin implements IntegrationPlugin {
   }
 
   async stop(): Promise<void> {
+    if (this.backfill) {
+      this.backfill.stop();
+      this.backfill = null;
+    }
     if (this.mqtt) {
       await this.mqtt.disconnect();
       this.mqtt = null;
@@ -164,6 +178,61 @@ class ShellyMqttPlugin implements IntegrationPlugin {
     this.status = "disconnected";
     this.eventBus.emit({ type: "system.integration.disconnected", integrationId: this.id });
     this.logger.info({}, "Shelly MQTT plugin stopped");
+  }
+
+  /**
+   * Wire the backfill manager. Reuses the engine's known-channels view
+   * for discovery and resolves each Shelly's mDNS host id via the
+   * `<id>.local` convention. RPC clients are cached per host so retries
+   * across multiple runs share connection-pool benefits.
+   */
+  private startBackfill(): void {
+    const enabled = this.getBoolSetting("backfill_enabled", true);
+    if (!enabled) return;
+    const scanHours = this.clampInt(this.getSetting("backfill_hours"), 24, 1, 168);
+    const authUser = this.getSetting("shelly_auth_user")?.trim() || undefined;
+    const authPassword = this.getSetting("shelly_auth_password")?.trim() || undefined;
+    const auth = authUser && authPassword ? { user: authUser, password: authPassword } : undefined;
+
+    const rpcCache = new Map<string, ShellyRpcClient>();
+    const rpcFor = (deviceMacId: string): ShellyRpcClient => {
+      let c = rpcCache.get(deviceMacId);
+      if (!c) {
+        c = createShellyRpcClient({
+          host: `${deviceMacId}.local`,
+          auth,
+          logger: this.logger,
+        });
+        rpcCache.set(deviceMacId, c);
+      }
+      return c;
+    };
+
+    this.backfill = new BackfillManager({
+      enabled: true,
+      scanHours,
+      gapThresholdSec: 5 * 60,
+      integrationId: INTEGRATION_ID,
+      deviceManager: this.deviceManager,
+      channelsProvider: () => this.engine?.getKnownChannelGroups() ?? [],
+      rpcFor,
+      setLastCumul: (sid, baseline) => this.engine?.setLastCumul(sid, baseline),
+      logger: this.logger,
+    });
+    this.backfill.start();
+  }
+
+  private getBoolSetting(key: string, def: boolean): boolean {
+    const raw = this.getSetting(key);
+    if (raw === undefined || raw === null || raw === "") return def;
+    return raw === "true" || raw === "1";
+  }
+
+  private clampInt(raw: string | undefined, def: number, min: number, max: number): number {
+    if (!raw) return def;
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isFinite(n)) return def;
+    return Math.max(min, Math.min(max, n));
   }
 
   async executeOrder(_device: Device, _orderKey: unknown, _value: unknown): Promise<void> {

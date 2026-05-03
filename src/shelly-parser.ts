@@ -16,7 +16,7 @@
  * just exposes data.
  */
 
-export type ShellyTopicKind = "online" | "em1" | "em1data";
+export type ShellyTopicKind = "online" | "em1" | "em1data" | "events_rpc";
 
 export interface ShellyTopicInfo {
   /** Shelly device id, taken as the segment immediately before /online or /status/... */
@@ -47,6 +47,11 @@ export function extractDeviceTopic(topic: string): ShellyTopicInfo | null {
     return { shellyId: beforeLast, channel: null, kind: "online" };
   }
 
+  // .../shellyId/events/rpc — used to learn the device's mDNS host id
+  if (last === "rpc" && beforeLast === "events" && parts.length >= 3) {
+    return { shellyId: parts[parts.length - 3], channel: null, kind: "events_rpc" };
+  }
+
   // .../shellyId/status/<component>
   if (parts.length >= 3 && beforeLast === "status") {
     const shellyId = parts[parts.length - 3];
@@ -60,6 +65,19 @@ export function extractDeviceTopic(topic: string): ShellyTopicInfo | null {
   }
 
   return null;
+}
+
+/**
+ * Extract the `src` (= mDNS host id) from a Shelly events/rpc payload.
+ * Returns `null` if the JSON is invalid or `src` is missing.
+ */
+export function parseEventsRpcSrc(buf: Buffer): string | null {
+  try {
+    const obj = JSON.parse(buf.toString("utf8")) as { src?: unknown };
+    return typeof obj.src === "string" && obj.src.length > 0 ? obj.src : null;
+  } catch {
+    return null;
+  }
 }
 
 interface Em1StatusPayload {
