@@ -7,7 +7,7 @@
   "icon": "Zap",
   "repo": "mchacher/sowel-plugin-shelly-mqtt",
   "author": "mchacher",
-  "sowelVersion": ">=1.5.4",
+  "sowelVersion": ">=1.5.1",
   "settings": [
     {
       "key": "mqtt_url",
