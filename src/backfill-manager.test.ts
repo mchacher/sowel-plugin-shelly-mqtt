@@ -411,6 +411,65 @@ describe("BackfillManager", () => {
     expect(captured).toHaveLength(0);
   });
 
+  it("boot run is delayed until at least one channel is discovered", async () => {
+    const lastSec = NOW_S - 30 * 60;
+    const { dm, captured } = makeDM({
+      lastUpdatedSec: lastSec,
+      baselines: { "shelly-pro3em_00-em0": { fwd: 0, rev: 0 } },
+    });
+    const rpc = makeRpc(
+      { 0: [{ ts: lastSec, period: 60, records: 1 }] },
+      { 0: [{ ts: lastSec, totalActEnergy: 5, totalActRetEnergy: 0 }] },
+    );
+    // Channels arrive after ~6 s (= MQTT topics dispatched a few seconds after start).
+    let channels: ShellyChannelGroup[] = [];
+    const bm = new BackfillManager({
+      enabled: true,
+      scanHours: 24,
+      gapThresholdSec: 300,
+      integrationId: INTEG,
+      deviceManager: dm,
+      channelsProvider: () => channels,
+      rpcFor: () => rpc,
+      setLastCumul: () => {},
+      logger: silentLogger,
+    });
+    bm.start();
+    // 1st poll tick: still no channels
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(captured).toHaveLength(0);
+    // Channels arrive — next poll tick at +4 s should trigger the boot run.
+    channels = [ch(0)];
+    await vi.advanceTimersByTimeAsync(2000);
+    // Allow the async runOnce to settle
+    await vi.advanceTimersByTimeAsync(0);
+    expect(captured).toHaveLength(1);
+    bm.stop();
+  });
+
+  it("boot run gives up after 60 s if channels never arrive (no leak)", async () => {
+    const { dm } = makeDM({});
+    const rpcFor = vi.fn();
+    const bm = new BackfillManager({
+      enabled: true,
+      scanHours: 24,
+      gapThresholdSec: 300,
+      integrationId: INTEG,
+      deviceManager: dm,
+      channelsProvider: () => [],
+      rpcFor,
+      setLastCumul: () => {},
+      logger: silentLogger,
+    });
+    bm.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    // bootPoll has fired the runOnce (with empty channels → no-op) and cleared itself.
+    // Stop must not throw. Also ensure no further polls happen.
+    bm.stop();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(rpcFor).not.toHaveBeenCalled();
+  });
+
   it("two concurrent triggers — second one sees inFlight, skips", async () => {
     const lastSec = NOW_S - 30 * 60;
     const { dm, captured } = makeDM({
