@@ -59,6 +59,7 @@ export class BackfillManager {
   private readonly logger: Logger;
   private readonly opts: BackfillManagerOptions;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private bootPollTimer: ReturnType<typeof setInterval> | null = null;
   /** Set when start() is called and cleared by stop(). Guards reentrance. */
   private running = false;
   /** True while a run is mid-flight; new triggers wait or no-op. */
@@ -83,8 +84,24 @@ export class BackfillManager {
       "Backfill manager started",
     );
 
-    // Boot run, fired async so start() is non-blocking.
-    void this.runOnce("boot");
+    // Boot run can't fire immediately: MQTT topics arrive a few seconds
+    // after start() and the engine populates `known` only then. Poll
+    // every 2 s for up to 60 s; fire the boot run as soon as at least
+    // one channel is discovered. After it succeeds (or we time out),
+    // stop the boot poll and let the periodic interval take over.
+    let bootElapsedMs = 0;
+    const bootPollIntervalMs = 2_000;
+    const bootDeadlineMs = 60_000;
+    this.bootPollTimer = setInterval(() => {
+      bootElapsedMs += bootPollIntervalMs;
+      const channels = this.opts.channelsProvider();
+      if (channels.length === 0 && bootElapsedMs < bootDeadlineMs) return;
+      if (this.bootPollTimer) {
+        clearInterval(this.bootPollTimer);
+        this.bootPollTimer = null;
+      }
+      void this.runOnce("boot");
+    }, bootPollIntervalMs);
 
     const interval = this.opts.periodicIntervalMs ?? 60 * 60 * 1000;
     this.timer = setInterval(() => {
@@ -98,6 +115,10 @@ export class BackfillManager {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    if (this.bootPollTimer) {
+      clearInterval(this.bootPollTimer);
+      this.bootPollTimer = null;
     }
   }
 
