@@ -2,12 +2,12 @@
   "id": "shelly_mqtt",
   "type": "integration",
   "name": "Shelly MQTT",
-  "version": "1.1.0",
-  "description": "Shelly Pro / Plus devices over MQTT — live + cumulative energy from EM channels (Pro 3EM only in V1)",
+  "version": "1.2.1",
+  "description": "Shelly Pro / Plus devices over MQTT — live + cumulative energy from EM channels, plus historical backfill from device flash on Pro 3EM",
   "icon": "Zap",
   "repo": "mchacher/sowel-plugin-shelly-mqtt",
   "author": "mchacher",
-  "sowelVersion": ">=1.5.1",
+  "sowelVersion": ">=1.5.4",
   "settings": [
     {
       "key": "mqtt_url",
@@ -42,6 +42,32 @@
       "required": false,
       "defaultValue": "shelly/#",
       "placeholder": "Wildcard the plugin subscribes to"
+    },
+    {
+      "key": "backfill_enabled",
+      "label": "Replay missing minutes from device flash on boot",
+      "type": "boolean",
+      "required": false,
+      "defaultValue": "true"
+    },
+    {
+      "key": "backfill_hours",
+      "label": "Backfill window (hours, max 168)",
+      "type": "number",
+      "required": false,
+      "defaultValue": "24"
+    },
+    {
+      "key": "shelly_auth_user",
+      "label": "Shelly device username (only if device auth enabled)",
+      "type": "text",
+      "required": false
+    },
+    {
+      "key": "shelly_auth_password",
+      "label": "Shelly device password",
+      "type": "password",
+      "required": false
     }
   ],
   "apiVersion": 2
