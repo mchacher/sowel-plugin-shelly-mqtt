@@ -30,7 +30,7 @@ Read-only — Pro 3EM has no orders.
 
 | Key                    | Default         | Notes                                                                   |
 |------------------------|-----------------|-------------------------------------------------------------------------|
-| `mqtt_url`             | required        | e.g. `mqtt://192.168.0.230:1883`                                        |
+| `mqtt_url`             | required        | default `mqtt://host.docker.internal:1883` (broker on the Docker host)                                        |
 | `mqtt_username`        | optional        |                                                                         |
 | `mqtt_password`        | optional        |                                                                         |
 | `mqtt_client_id`       | `sowel-shelly`  | random suffix added at connect                                          |

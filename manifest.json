@@ -2,7 +2,7 @@
   "id": "shelly_mqtt",
   "type": "integration",
   "name": "Shelly MQTT",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "Shelly Pro / Plus devices over MQTT — live + cumulative energy from EM channels, plus historical backfill from device flash on Pro 3EM",
   "icon": "Zap",
   "repo": "mchacher/sowel-plugin-shelly-mqtt",
@@ -14,7 +14,8 @@
       "label": "MQTT Broker URL",
       "type": "text",
       "required": true,
-      "placeholder": "mqtt://localhost:1883"
+      "placeholder": "mqtt://host.docker.internal:1883",
+      "defaultValue": "mqtt://host.docker.internal:1883"
     },
     {
       "key": "mqtt_username",
